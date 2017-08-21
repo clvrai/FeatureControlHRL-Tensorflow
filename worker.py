@@ -1,6 +1,4 @@
 #!/usr/bin/env python
-import cv2
-import go_vncdriver
 import tensorflow as tf
 import argparse
 import logging
@@ -73,11 +71,14 @@ def run(args, server):
         "Starting session. If this hangs, we're mostly likely waiting to connect to the parameter server. " +
         "One common cause is that the parameter server DNS name isn't resolving yet, or is misspecified.")
     with sv.managed_session(server.target, config=config) as sess, sess.as_default():
+        sess.run(trainer.meta_sync)
         sess.run(trainer.sync)
         trainer.start(sess, summary_writer)
         global_step = sess.run(trainer.global_step)
         logger.info("Starting training at step=%d", global_step)
         while not sv.should_stop() and (not num_global_steps or global_step < num_global_steps):
+            #trainer.sub_process(sess)
+            #trainer.meta_process(sess)
             trainer.process(sess)
             global_step = sess.run(trainer.global_step)
 
