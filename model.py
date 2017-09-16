@@ -53,27 +53,24 @@ class SubPolicy(object):
         self.subgoal = subgoal = tf.placeholder(tf.float32, [None, subgoal_space], name='subgoal')
 
         with tf.variable_scope('encoder'):
+            x = tf.image.resize_images(x, [84, 84])
+            x = x / 255.0
             x = tf.nn.relu(conv2d(x, 16, "l1", [8, 8], [4, 4]))
             x = tf.nn.relu(conv2d(x, 32, "l2", [4, 4], [2, 2]))
-            dim = int(x.get_shape()[1]) * int(x.get_shape()[2]) * int(x.get_shape()[3])
-            x = tf.reshape(x, [-1, dim])
+            self.f = tf.reduce_mean(x, axis=[1, 2])
+            x = flatten(x)
 
-            self.f = x
-
+        with tf.variable_scope('sub_policy'):
             x = tf.nn.relu(linear(x, 256, "fc", normalized_columns_initializer(0.01)))
             x = tf.concat([x, action_prev], axis=1)
             x = tf.concat([x, reward_prev], axis=1)
             x = tf.concat([x, subgoal], axis=1)
 
             # introduce a "fake" batch dimension of 1 after flatten so that we can do LSTM over time dim
-            x = tf.expand_dims(flatten(x), [0])
+            x = tf.expand_dims(x, [0])
 
-        with tf.variable_scope('sub_policy'):
             size = 256
-            if use_tf100_api:
-                lstm = rnn.BasicLSTMCell(size, state_is_tuple=True)
-            else:
-                lstm = rnn.rnn_cell.BasicLSTMCell(size, state_is_tuple=True)
+            lstm = rnn.BasicLSTMCell(size, state_is_tuple=True)
             self.state_size = lstm.state_size
             step_size = tf.shape(self.x)[:1]
 
@@ -84,19 +81,17 @@ class SubPolicy(object):
             h_in = tf.placeholder(tf.float32, [1, lstm.state_size.h])
             self.state_in = [c_in, h_in]
 
-            if use_tf100_api:
-                state_in = rnn.LSTMStateTuple(c_in, h_in)
-            else:
-                state_in = rnn.rnn_cell.LSTMStateTuple(c_in, h_in)
+            state_in = rnn.LSTMStateTuple(c_in, h_in)
+
             lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
                 lstm, x, initial_state=state_in, sequence_length=step_size,
                 time_major=False)
             lstm_c, lstm_h = lstm_state
-            x = tf.reshape(lstm_outputs, [-1, size])
-            self.logits = linear(x, ac_space, "action", normalized_columns_initializer(0.01))
-            self.vf = tf.reshape(linear(x, 1, "value", normalized_columns_initializer(1.0)), [-1])
+            lstm_outputs = tf.reshape(lstm_outputs, [-1, size])
+            self.logits = linear(lstm_outputs, ac_space, "action", normalized_columns_initializer(0.01))
+            self.vf = tf.reshape(linear(lstm_outputs, 1, "value", normalized_columns_initializer(1.0)), [-1])
             self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
-            self.sample = categorical_sample(self.logits, ac_space)
+            self.sample = categorical_sample(self.logits, ac_space)[0, :]
         self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
 
     def get_initial_features(self):
@@ -106,17 +101,17 @@ class SubPolicy(object):
         sess = tf.get_default_session()
         return sess.run([self.sample, self.vf] + self.state_out,
                         {self.x: [ob], self.state_in[0]: c, self.state_in[1]: h,
-                         self.action_prev: action_prev,
-                         self.reward_prev: reward_prev,
-                         self.subgoal: subgoal})
+                         self.action_prev: [action_prev],
+                         self.reward_prev: [reward_prev],
+                         self.subgoal: [subgoal]})
 
     def value(self, ob, action_prev, reward_prev, subgoal, c, h):
         sess = tf.get_default_session()
         return sess.run(self.vf, {self.x: [ob], self.state_in[0]: c,
                                   self.state_in[1]: h,
-                                  self.action_prev: action_prev,
-                                  self.reward_prev: reward_prev,
-                                  self.subgoal: subgoal})[0]
+                                  self.action_prev: [action_prev],
+                                  self.reward_prev: [reward_prev],
+                                  self.subgoal: [subgoal]})[0]
 
     def feature(self, state):
         sess = tf.get_default_session()
@@ -130,26 +125,22 @@ class MetaPolicy(object):
         self.reward_prev = reward_prev = tf.placeholder(tf.float32, [None, 1], name='reward_prev_meta')
 
         with tf.variable_scope('encoder', reuse=True):
+            x = tf.image.resize_images(x, [84, 84])
+            x = x / 255.0
             x = tf.nn.relu(conv2d(x, 16, "l1", [8, 8], [4, 4]))
             x = tf.nn.relu(conv2d(x, 32, "l2", [4, 4], [2, 2]))
-            dim = int(x.get_shape()[1]) * int(x.get_shape()[2]) * int(x.get_shape()[3])
-            x = tf.reshape(x, [-1, dim])
+            x = flatten(x)
 
-            self.f = x
-
+        with tf.variable_scope('meta_policy'):
             x = tf.nn.relu(linear(x, 256, "fc", normalized_columns_initializer(0.01)))
             x = tf.concat([x, subgoal_prev], axis=1)
             x = tf.concat([x, reward_prev], axis=1)
 
             # introduce a "fake" batch dimension of 1 after flatten so that we can do LSTM over time dim
-            x = tf.expand_dims(flatten(x), [0])
+            x = tf.expand_dims(x, [0])
 
-        with tf.variable_scope('meta_policy'):
             size = 256
-            if use_tf100_api:
-                lstm = rnn.BasicLSTMCell(size, state_is_tuple=True)
-            else:
-                lstm = rnn.rnn_cell.BasicLSTMCell(size, state_is_tuple=True)
+            lstm = rnn.BasicLSTMCell(size, state_is_tuple=True)
             self.state_size = lstm.state_size
             step_size = tf.shape(self.x)[:1]
 
@@ -160,19 +151,16 @@ class MetaPolicy(object):
             h_in = tf.placeholder(tf.float32, [1, lstm.state_size.h])
             self.state_in = [c_in, h_in]
 
-            if use_tf100_api:
-                state_in = rnn.LSTMStateTuple(c_in, h_in)
-            else:
-                state_in = rnn.rnn_cell.LSTMStateTuple(c_in, h_in)
+            state_in = rnn.LSTMStateTuple(c_in, h_in)
             lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
                 lstm, x, initial_state=state_in, sequence_length=step_size,
                 time_major=False)
             lstm_c, lstm_h = lstm_state
-            x = tf.reshape(lstm_outputs, [-1, size])
-            self.logits = linear(x, subgoal_space, "action", normalized_columns_initializer(0.01))
-            self.vf = tf.reshape(linear(x, 1, "value", normalized_columns_initializer(1.0)), [-1])
+            lstm_outputs = tf.reshape(lstm_outputs, [-1, size])
+            self.logits = linear(lstm_outputs, subgoal_space, "action", normalized_columns_initializer(0.01))
+            self.vf = tf.reshape(linear(lstm_outputs, 1, "value", normalized_columns_initializer(1.0)), [-1])
             self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
-            self.sample = categorical_sample(self.logits, subgoal_space)
+            self.sample = categorical_sample(self.logits, subgoal_space)[0, :]
         self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
 
     def get_initial_features(self):
@@ -182,12 +170,12 @@ class MetaPolicy(object):
         sess = tf.get_default_session()
         return sess.run([self.sample, self.vf] + self.state_out,
                         {self.x: [ob], self.state_in[0]: c, self.state_in[1]: h,
-                         self.subgoal_prev: subgoal_prev,
-                         self.reward_prev: reward_prev})
+                         self.subgoal_prev: [subgoal_prev],
+                         self.reward_prev: [reward_prev]})
 
     def value(self, ob, subgoal_prev, reward_prev, c, h):
         sess = tf.get_default_session()
         return sess.run(self.vf, {self.x: [ob], self.state_in[0]: c,
                                   self.state_in[1]: h,
-                                  self.subgoal_prev: subgoal_prev,
-                                  self.reward_prev: reward_prev})[0]
+                                  self.subgoal_prev: [subgoal_prev],
+                                  self.reward_prev: [reward_prev]})[0]

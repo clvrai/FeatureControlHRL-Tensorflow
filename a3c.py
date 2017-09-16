@@ -1,11 +1,7 @@
-from __future__ import print_function
-from collections import namedtuple
 import numpy as np
 import tensorflow as tf
 from model import SubPolicy, MetaPolicy
-import six.moves.queue as queue
 import scipy.signal
-import threading
 import distutils.version
 use_tf12_api = distutils.version.LooseVersion(tf.VERSION) >= distutils.version.LooseVersion('0.12.0')
 
@@ -78,178 +74,6 @@ once it has processed enough steps.
         self.features.extend(other.features)
 
 
-class RunnerThread(threading.Thread):
-    """
-One of the key distinctions between a normal environment and a universe environment
-is that a universe environment is _real time_.  This means that there should be a thread
-that would constantly interact with the environment and tell it what to do.  This thread is here.
-"""
-    def __init__(self, env, sub_policy, meta_policy, num_local_steps, visualise):
-        threading.Thread.__init__(self)
-        self.sub_queue = queue.Queue(5)
-        self.meta_queue = queue.Queue(5)
-        self.num_local_steps = num_local_steps
-        self.env = env
-        self.last_features = None
-        self.sub_policy = sub_policy
-        self.meta_policy = meta_policy
-        self.daemon = True
-        self.sess = None
-        self.summary_writer = None
-        self.visualise = visualise
-
-    def start_runner(self, sess, summary_writer):
-        self.sess = sess
-        self.summary_writer = summary_writer
-        self.start()
-
-    def run(self):
-        with self.sess.as_default():
-            self._run()
-
-    def _run(self):
-        rollout_provider = env_runner(self.env, self.sub_policy, self.meta_policy, self.num_local_steps, self.summary_writer, self.visualise)
-        while True:
-            # the timeout variable exists because apparently, if one worker dies, the other workers
-            # won't die with it, unless the timeout is set to some large number.  This is an empirical
-            # observation.
-
-            t, rollout = next(rollout_provider)
-            if t == 0:
-                self.sub_queue.put(rollout, timeout=600.0)
-            else:
-                self.meta_queue.put(rollout, timeout=600.0)
-
-
-
-def env_runner(env, sub_policy, meta_policy, num_local_steps, summary_writer, render):
-    """
-The logic of the thread runner.  In brief, it constantly keeps on running
-the policy, and as long as the rollout exceeds a certain length, the thread
-runner appends the policy to the queue.
-"""
-    num_local_meta_steps = 20
-
-    subgoal_space = 32
-    action_space = env.action_space.n
-
-    last_meta_state = last_state = env.reset()
-    last_features = sub_policy.get_initial_features()
-    last_meta_features = meta_policy.get_initial_features()
-
-    last_subgoal = np.zeros((1, subgoal_space))
-    last_action = np.zeros((1, action_space))
-    last_meta_reward = np.zeros((1, 1))
-    last_reward = np.zeros((1, 1))
-
-    length = 0
-    rewards = 0
-    extrinsic_reward = 0
-    intrinsic_reward = 0
-    beta = 0.75
-    steps = 0
-
-    while True:
-        terminal_end = False
-        meta_rollout = PartialRollout()
-
-        for _ in range(num_local_meta_steps):
-            fetched = meta_policy.act(last_meta_state, last_subgoal, last_meta_reward, *last_meta_features)
-            subgoal, value_, meta_features = fetched[0], fetched[1], fetched[2:]
-
-            for _ in range(5):
-                sub_rollout = PartialRollout()
-                meta_reward = 0
-                for _ in range(num_local_steps):
-                    fetched = sub_policy.act(last_state, last_action, last_reward, subgoal, *last_features)
-                    action, value_, features = fetched[0], fetched[1], fetched[2:]
-
-                    # argmax to convert from one-hot
-                    state, extrinsic_reward, terminal, info = env.step(action[0, :].argmax())
-                    def compute_intrinsic(state, last_state, subgoal):
-                        f = sub_policy.feature(state)
-                        last_f = sub_policy.feature(last_state)
-                        diff = np.abs(f - last_f)
-                        eta = 0.05
-                        return eta * np.sum(diff[subgoal]) / (np.sum(diff) + 1e-10)
-                    intrinsic_reward = compute_intrinsic(state, last_state, subgoal[0, :].argmax())
-                    reward = beta * extrinsic_reward + (1 - beta) * intrinsic_reward
-                    meta_reward += extrinsic_reward
-
-                    # collect the experience
-                    si = {
-                        'x': last_state,
-                        'action_prev': last_action[0],
-                        'reward_prev': last_reward[0],
-                        'subgoal': subgoal[0]
-                    }
-
-                    sub_rollout.add(si, action[0, :], reward, value_, terminal, last_features)
-                    length += 1
-                    rewards += reward
-
-                    last_state = state
-                    last_action = action
-                    last_features = features
-                    last_reward = [[reward]]
-
-                    if info:
-                        summary = tf.Summary()
-                        for k, v in info.items():
-                            summary.value.add(tag=k, simple_value=float(v))
-                        summary_writer.add_summary(summary, sub_policy.global_step.eval())
-                        summary_writer.flush()
-
-                    timestep_limit = env.spec.tags.get('wrapper_config.TimeLimit.max_episode_steps')
-                    if terminal or length >= timestep_limit:
-                        terminal_end = True
-                        if length >= timestep_limit or not env.metadata.get('semantics.autoreset'):
-                            last_meta_state = last_state = env.reset()
-                            steps = 0
-                        last_features = sub_policy.get_initial_features()
-                        last_meta_features = meta_policy.get_initial_features()
-                        print("Episode finished. Sum of rewards: %d. Length: %d" % (rewards, length))
-                        length = 0
-                        rewards = 0
-                        break
-
-                if not terminal_end:
-                    sub_rollout.r = sub_policy.value(last_state, last_action, last_reward, subgoal, *last_features)
-
-                yield (0, sub_rollout)
-
-                if terminal_end:
-                    break
-
-            si = {
-                'x': last_meta_state,
-                'subgoal_prev': last_subgoal[0],
-                'reward_prev': last_meta_reward[0]
-            }
-
-            meta_rollout.add(si, subgoal[0], meta_reward, value_, terminal_end, last_meta_features)
-
-            last_meta_state = state
-            last_meta_features = meta_features
-            last_meta_reward = [[meta_reward]]
-            last_subgoal = subgoal
-
-            last_state = state
-            last_action = action
-            last_reward = [[reward]]
-            last_features = features
-
-            if terminal_end:
-                last_meta_features = meta_policy.get_initial_features()
-                break
-
-        if terminal_end:
-            meta_rollout.r = meta_policy.value(last_state, last_subgoal, last_meta_reward, *last_features)
-
-        # once we have enough experience, yield it, and have the ThreadRunner place it on a queue
-        yield (1, meta_rollout)
-
-
 class A3C(object):
     def __init__(self, env, task, visualise):
         """
@@ -264,6 +88,7 @@ should be computed.
         worker_device = "/job:worker/task:{}/cpu:0".format(task)
         with tf.device(tf.train.replica_device_setter(1, worker_device=worker_device)):
             with tf.variable_scope("global"):
+                print(env.observation_space.shape)
                 self.sub_network = SubPolicy(env.observation_space.shape, env.action_space.n, 32)
                 self.meta_network = MetaPolicy(env.observation_space.shape, 32)
                 self.global_step = tf.get_variable("global_step", [], tf.int32, initializer=tf.constant_initializer(0, dtype=tf.int32),
@@ -320,310 +145,252 @@ should be computed.
             # on the one hand;  but on the other hand, we get less frequent parameter updates, which
             # slows down learning.  In this code, we found that making local steps be much
             # smaller than 20 makes the algorithm more difficult to tune and to get to work.
-            self.runner = RunnerThread(env, pi, meta_pi, 20, visualise)
-
+            # self.runner = RunnerThread(env, pi, meta_pi, 20, visualise)
 
             grads = tf.gradients(self.loss, pi.var_list)
             meta_grads = tf.gradients(self.meta_loss, meta_pi.var_list)
-#
-#
-#          if use_tf12_api:
-#              tf.summary.scalar("model/policy_loss", pi_loss / bs)
-#              tf.summary.scalar("model/value_loss", vf_loss / bs)
-#              tf.summary.scalar("model/entropy", entropy / bs)
-#              tf.summary.image("model/state", pi.x)
-#              tf.summary.scalar("model/grad_global_norm", tf.global_norm(grads))
-#              tf.summary.scalar("model/var_global_norm", tf.global_norm(pi.var_list))
-#              tf.summary.scalar("meta_model/policy_loss", meta_pi_loss / meta_bs)
-#              tf.summary.scalar("meta_model/value_loss", meta_vf_loss / meta_bs)
-#              tf.summary.scalar("meta_model/entropy", meta_entropy / meta_bs)
-#              tf.summary.scalar("meta_model/grad_global_norm", tf.global_norm(meta_grads))
-#              tf.summary.scalar("meta_model/var_global_norm", tf.global_norm(meta_pi.var_list))
-#              self.summary_op = tf.summary.merge_all()
-#
-#          else:
-#              tf.scalar_summary("model/policy_loss", pi_loss / bs)
-#              tf.scalar_summary("model/value_loss", vf_loss / bs)
-#              tf.scalar_summary("model/entropy", entropy / bs)
-#              tf.image_summary("model/state", pi.x)
-#              tf.scalar_summary("model/grad_global_norm", tf.global_norm(grads))
-#              tf.scalar_summary("model/var_global_norm", tf.global_norm(pi.var_list))
-#              self.summary_op = tf.merge_all_summaries()
-#
+
+            summary = [
+                tf.summary.scalar("model/policy_loss", pi_loss / bs),
+                tf.summary.scalar("model/value_loss", vf_loss / bs),
+                tf.summary.scalar("model/entropy", entropy / bs),
+                tf.summary.image("model/state", pi.x),
+                tf.summary.scalar("model/grad_global_norm", tf.global_norm(grads)),
+                tf.summary.scalar("model/var_global_norm", tf.global_norm(pi.var_list))
+            ]
+
+            meta_summary = [
+                tf.summary.scalar("meta_model/policy_loss", meta_pi_loss / meta_bs),
+                tf.summary.scalar("meta_model/value_loss", meta_vf_loss / meta_bs),
+                tf.summary.scalar("meta_model/entropy", meta_entropy / meta_bs),
+                tf.summary.scalar("meta_model/grad_global_norm", tf.global_norm(meta_grads)),
+                tf.summary.scalar("meta_model/var_global_norm", tf.global_norm(meta_pi.var_list))
+            ]
+            self.summary_op = tf.summary.merge(summary)
+            self.meta_summary_op = tf.summary.merge(meta_summary)
+
             grads, _ = tf.clip_by_global_norm(grads, 40.0)
             meta_grads, _ = tf.clip_by_global_norm(meta_grads, 40.0)
+            self.grads = grads
 
             # copy weights from the parameter server to the local model
             self.sync = tf.group(*[v1.assign(v2) for v1, v2 in zip(pi.var_list, self.sub_network.var_list)])
             self.meta_sync = tf.group(*[v1.assign(v2) for v1, v2 in zip(meta_pi.var_list, self.meta_network.var_list)])
 
             grads_and_vars = list(zip(grads, self.sub_network.var_list))
-            inc_step = self.global_step.assign_add(tf.shape(pi.x)[0])
             meta_grads_and_vars = list(zip(meta_grads, self.meta_network.var_list))
-            meta_inc_step = self.global_step.assign_add(tf.shape(meta_pi.x)[0])
+
+            inc_step = self.global_step.assign_add(tf.shape(pi.x)[0])
 
             # each worker has a different set of adam optimizer parameters
             opt = tf.train.AdamOptimizer(1e-4)
             self.train_op = tf.group(opt.apply_gradients(grads_and_vars), inc_step)
             meta_opt = tf.train.AdamOptimizer(1e-4)
-            self.meta_train_op = tf.group(meta_opt.apply_gradients(meta_grads_and_vars), meta_inc_step)
+            self.meta_train_op = meta_opt.apply_gradients(meta_grads_and_vars)
 
             self.summary_writer = None
             self.local_steps = 0
 
     def start(self, sess, summary_writer):
-        self.runner.start_runner(sess, summary_writer)
         self.summary_writer = summary_writer
 
-    def pull_batch_from_sub_queue(self):
-        """
-self explanatory:  take a rollout from the queue of the thread runner.
-"""
-        rollout = self.runner.sub_queue.get(timeout=600.0)
-        while not rollout.terminal:
-            try:
-                rollout.extend(self.runner.sub_queue.get_nowait())
-            except queue.Empty:
-                break
-        return rollout
+        self.action_space = self.env.action_space.n
+        self.subgoal_space = 32
 
-    def pull_batch_from_meta_queue(self):
-        """
-self explanatory:  take a rollout from the queue of the thread runner.
-"""
-        rollout = self.runner.meta_queue.get(timeout=600.0)
-        while not rollout.terminal:
-            try:
-                rollout.extend(self.runner.meta_queue.get_nowait())
-            except queue.Empty:
-                break
-        return rollout
+        self.beta = 0.75
+        self.eta = 0.05
+        self.bptt = 100
+        self.num_local_steps = self.bptt
+        self.num_local_meta_steps = 20
 
     def process(self, sess):
-
-        sess.run(self.meta_sync)  # copy weights from shared to local
-        sess.run(self.sync)  # copy weights from shared to local
-
+        """
+        run one episode and process experience to train both meta and sub networks
+        """
         env = self.env
-        num_local_meta_steps = 20
-        num_local_steps = 20
-
-        subgoal_space = 32
-        action_space = self.env.action_space.n
 
         sub_policy = self.local_sub_network
         meta_policy = self.local_meta_network
 
-        last_meta_state = last_state = self.env.reset()
-        last_features = sub_policy.get_initial_features()
-        last_meta_features = meta_policy.get_initial_features()
+        self.last_state = env.reset()
+        self.last_meta_state = env.reset()
+        self.last_features = sub_policy.get_initial_features()
+        self.last_meta_features = meta_policy.get_initial_features()
 
-        last_subgoal = np.zeros((1, subgoal_space))
-        last_action = np.zeros((1, action_space))
-        last_meta_reward = np.zeros((1, 1))
-        last_reward = np.zeros((1, 1))
+        self.last_action = np.zeros(self.action_space)
+        self.last_subgoal = np.zeros(self.subgoal_space)
+        self.last_reward = np.zeros(1)
+        self.last_meta_reward = np.zeros(1)
 
-        length = 0
-        rewards = 0
-        extrinsic_reward = 0
-        intrinsic_reward = 0
-        beta = 0.75
-        steps = 0
+        self.length = 0
+        self.rewards = 0
+        self.extrinsic_rewards = 0
+        self.intrinsic_rewards = 0
 
-        while True:
-            terminal_end = False
-            meta_rollout = PartialRollout()
-
-            for _ in range(num_local_meta_steps):
-                fetched = meta_policy.act(last_meta_state, last_subgoal, last_meta_reward, *last_meta_features)
-                subgoal, value_, meta_features = fetched[0], fetched[1], fetched[2:]
-
-                for _ in range(5):
-                    sub_rollout = PartialRollout()
-                    meta_reward = 0
-                    for _ in range(num_local_steps):
-                        fetched = sub_policy.act(last_state, last_action, last_reward, subgoal, *last_features)
-                        action, value_, features = fetched[0], fetched[1], fetched[2:]
-
-                        # argmax to convert from one-hot
-                        state, extrinsic_reward, terminal, info = self.env.step(action[0, :].argmax())
-                        def compute_intrinsic(state, last_state, subgoal):
-                            f = sub_policy.feature(state)
-                            last_f = sub_policy.feature(last_state)
-                            diff = np.abs(f - last_f)
-                            eta = 0.05
-                            return eta * np.sum(diff[subgoal]) / (np.sum(diff) + 1e-10)
-                        intrinsic_reward = compute_intrinsic(state, last_state, subgoal[0, :].argmax())
-                        reward = beta * extrinsic_reward + (1 - beta) * intrinsic_reward
-                        meta_reward += extrinsic_reward
-
-                        # collect the experience
-                        si = {
-                            'x': last_state,
-                            'action_prev': last_action[0],
-                            'reward_prev': last_reward[0],
-                            'subgoal': subgoal[0]
-                        }
-
-                        sub_rollout.add(si, action[0, :], reward, value_, terminal, last_features)
-                        length += 1
-                        rewards += reward
-
-                        last_state = state
-                        last_action = action
-                        last_features = features
-                        last_reward = [[reward]]
-
-                        timestep_limit = self.env.spec.tags.get('wrapper_config.TimeLimit.max_episode_steps')
-                        if terminal or length >= timestep_limit:
-                            terminal_end = True
-                            if length >= timestep_limit or not self.env.metadata.get('semantics.autoreset'):
-                                last_meta_state = last_state = self.env.reset()
-                                steps = 0
-                            last_features = sub_policy.get_initial_features()
-                            last_meta_features = meta_policy.get_initial_features()
-                            print("Episode finished. Sum of rewards: %d. Length: %d" % (rewards, length))
-                            length = 0
-                            rewards = 0
-                            break
-
-                    if not terminal_end:
-                        sub_rollout.r = sub_policy.value(last_state, last_action, last_reward, subgoal, *last_features)
-
-                    # Sub rollout
-                    batch = process_rollout(sub_rollout, gamma=0.99, lambda_=1.0)
-                    fetches = [self.train_op, self.global_step]
-                    feed_dict = {
-                        self.local_sub_network.x: batch.si['x'],
-                        self.local_sub_network.action_prev: batch.si['action_prev'],
-                        self.local_sub_network.reward_prev: batch.si['reward_prev'],
-                        self.local_sub_network.subgoal: batch.si['subgoal'],
-                        self.ac: batch.a,
-                        self.adv: batch.adv,
-                        self.r: batch.r,
-                        self.local_sub_network.state_in[0]: batch.features[0],
-                        self.local_sub_network.state_in[1]: batch.features[1],
-                    }
-                    fetched = sess.run(fetches, feed_dict=feed_dict)
-
-                    if terminal_end:
-                        break
-
-                si = {
-                    'x': last_meta_state,
-                    'subgoal_prev': last_subgoal[0],
-                    'reward_prev': last_meta_reward[0]
-                }
-
-                meta_rollout.add(si, subgoal[0], meta_reward, value_, terminal_end, last_meta_features)
-
-                last_meta_state = state
-                last_meta_features = meta_features
-                last_meta_reward = [[meta_reward]]
-                last_subgoal = subgoal
-
-                last_state = state
-                last_action = action
-                last_reward = [[reward]]
-                last_features = features
-
-                if terminal_end:
-                    last_meta_features = meta_policy.get_initial_features()
-                    break
-
-            if terminal_end:
-                meta_rollout.r = meta_policy.value(last_state, last_subgoal, last_meta_reward, *last_features)
-
-            # meta rollout
-            batch = process_rollout(meta_rollout, gamma=0.99, lambda_=1.0)
-            fetches = [self.meta_train_op, self.global_step]
-
-            feed_dict = {
-                self.local_meta_network.x: batch.si['x'],
-                self.local_meta_network.subgoal_prev: batch.si['subgoal_prev'],
-                self.local_meta_network.reward_prev: batch.si['reward_prev'],
-                self.meta_ac: batch.a,
-                self.meta_adv: batch.adv,
-                self.meta_r: batch.r,
-                self.local_meta_network.state_in[0]: batch.features[0],
-                self.local_meta_network.state_in[1]: batch.features[1],
-            }
-            fetched = sess.run(fetches, feed_dict=feed_dict)
-
-            self.local_steps += 1
-            break
+        terminal_end = False
+        while not terminal_end:
+            terminal_end = self.meta_process(sess)
 
     def meta_process(self, sess):
-        """
-process grabs a rollout that's been produced by the thread runner,
-and updates the parameters.  The update is then sent to the parameter
-server.
-"""
-
         sess.run(self.meta_sync)  # copy weights from shared to local
-        rollout = self.pull_batch_from_meta_queue()
-        batch = process_rollout(rollout, gamma=0.99, lambda_=1.0)
+        meta_rollout = PartialRollout()
+        meta_policy = self.local_meta_network
 
-        should_compute_summary = self.task == 0 and self.local_steps % 11 == 0
+        terminal_end = False
+        for _ in range(self.num_local_meta_steps):
+            fetched = meta_policy.act(self.last_meta_state, self.last_subgoal,
+                                      self.last_meta_reward, *self.last_meta_features)
+            subgoal, meta_value, meta_features = fetched[0], fetched[1], fetched[2:]
 
-        if should_compute_summary:
-            #fetches = [self.summary_op, self.train_op, self.global_step]
-            fetches = [self.meta_train_op, self.global_step]
-        else:
-            fetches = [self.meta_train_op, self.global_step]
+            assert self.bptt in [20, 100], 'bptt (%d) should be 20 or 100' % self.bptt
+
+            if self.bptt == 20:
+                meta_reward = 0
+                for _ in range(5):
+                    state, reward, terminal_end = self.sub_process(sess, subgoal)
+                    meta_reward += reward
+                    if terminal_end:
+                        break
+            elif self.bptt == 100:
+                state, meta_reward, terminal_end = self.sub_process(sess, subgoal)
+
+
+            si = {
+                'x': self.last_meta_state,
+                'subgoal_prev': self.last_subgoal,
+                'reward_prev': self.last_meta_reward
+            }
+            meta_rollout.add(si, subgoal, meta_reward, meta_value,
+                             terminal_end, self.last_meta_features)
+
+            self.last_meta_state = state
+            self.last_meta_features = meta_features
+            self.last_meta_reward = [meta_reward]
+            self.last_subgoal = subgoal
+
+            if terminal_end:
+                break
+
+        if not terminal_end:
+            meta_rollout.r = meta_policy.value(self.last_state,
+                                               self.last_subgoal,
+                                               self.last_meta_reward,
+                                               *self.last_meta_features)
+
+        # meta rollout
+        batch = process_rollout(meta_rollout, gamma=0.99, lambda_=1.0)
+        fetches = [self.meta_summary_op, self.meta_train_op, self.global_step]
 
         feed_dict = {
-            self.local_meta_network.x: batch.si['x'],
-            self.local_meta_network.subgoal_prev: batch.si['subgoal_prev'],
-            self.local_meta_network.reward_prev: batch.si['reward_prev'],
+            meta_policy.x: batch.si['x'],
+            meta_policy.subgoal_prev: batch.si['subgoal_prev'],
+            meta_policy.reward_prev: batch.si['reward_prev'],
             self.meta_ac: batch.a,
             self.meta_adv: batch.adv,
             self.meta_r: batch.r,
-            self.local_meta_network.state_in[0]: batch.features[0],
-            self.local_meta_network.state_in[1]: batch.features[1],
+            meta_policy.state_in[0]: batch.features[0],
+            meta_policy.state_in[1]: batch.features[1],
         }
-
         fetched = sess.run(fetches, feed_dict=feed_dict)
+        self.summary_writer.add_summary(fetched[0], fetched[-1])
 
-        if should_compute_summary:
-            #self.summary_writer.add_summary(tf.Summary.FromString(fetched[0]), fetched[-1])
-            self.summary_writer.flush()
-        self.local_steps += 1
+        return terminal_end
 
-    def sub_process(self, sess):
-        """
-process grabs a rollout that's been produced by the thread runner,
-and updates the parameters.  The update is then sent to the parameter
-server.
-"""
-
+    def sub_process(self, sess, subgoal):
         sess.run(self.sync)  # copy weights from shared to local
-        rollout = self.pull_batch_from_sub_queue()
-        batch = process_rollout(rollout, gamma=0.99, lambda_=1.0)
+        sub_rollout = PartialRollout()
+        sub_policy = self.local_sub_network
+        meta_reward = 0
 
+        terminal_end = False
+        for _ in range(self.num_local_steps):
+            fetched = sub_policy.act(self.last_state, self.last_action,
+                                     self.last_reward, subgoal, *self.last_features)
+            action, value, features = fetched[0], fetched[1], fetched[2:]
+
+            # argmax to convert from one-hot
+            state, episode_reward, terminal, info = self.env.step(action.argmax())
+            # reward clipping to the range of [-1, 1]
+            extrinsic_reward = max(min(episode_reward, 1), -1)
+
+            def compute_intrinsic(state, last_state, subgoal):
+                f = sub_policy.feature(state)
+                last_f = sub_policy.feature(last_state)
+                diff = np.abs(f - last_f)
+                return self.eta * diff[subgoal] / (np.sum(diff) + 1e-10)
+            intrinsic_reward = compute_intrinsic(state, self.last_state, subgoal.argmax())
+            reward = self.beta * extrinsic_reward + (1 - self.beta) * intrinsic_reward
+
+            meta_reward += extrinsic_reward
+            # meta_reward += reward
+            self.intrinsic_rewards += intrinsic_reward
+            self.extrinsic_rewards += extrinsic_reward
+
+            # collect the experience
+            si = {
+                'x': self.last_state,
+                'action_prev': self.last_action,
+                'reward_prev': self.last_reward,
+                'subgoal': subgoal
+            }
+            sub_rollout.add(si, action, reward, value, terminal, self.last_features)
+
+            self.length += 1
+            self.rewards += episode_reward
+
+            self.last_state = state
+            self.last_action = action
+            self.last_features = features
+            self.last_reward = [reward]
+
+            timestep_limit = self.env.spec.tags.get('wrapper_config.TimeLimit.max_episode_steps')
+            if terminal or self.length >= timestep_limit:
+                terminal_end = True
+
+                summary = tf.Summary()
+                summary.value.add(tag='global/episode_reward',
+                                  simple_value=self.rewards)
+                summary.value.add(tag='global/extrinsic_reward',
+                                  simple_value=self.extrinsic_rewards)
+                summary.value.add(tag='global/intrinsic_reward',
+                                  simple_value=self.intrinsic_rewards)
+                summary.value.add(tag='global/episode_length',
+                                  simple_value=self.length)
+                self.summary_writer.add_summary(summary, sub_policy.global_step.eval())
+                self.summary_writer.flush()
+
+                print("Episode finished. Ep rewards: %.5f (In: %.5f, Ex: %.5f). Length: %d" %
+                      (self.rewards, self.intrinsic_rewards, self.extrinsic_rewards, self.length))
+                break
+
+        if not terminal_end:
+            sub_rollout.r = sub_policy.value(self.last_state,
+                                             self.last_action,
+                                             self.last_reward,
+                                             subgoal, *self.last_features)
+
+        self.local_steps += 1
         should_compute_summary = self.task == 0 and self.local_steps % 11 == 0
 
+        # sub rollout
+        batch = process_rollout(sub_rollout, gamma=0.99, lambda_=1.0)
+        fetches = [self.train_op, self.global_step]
         if should_compute_summary:
-            #fetches = [self.summary_op, self.train_op, self.global_step]
-            fetches = [self.train_op, self.global_step]
-        else:
-            fetches = [self.train_op, self.global_step]
-
+            fetches = [self.summary_op] + fetches
         feed_dict = {
-            self.local_sub_network.x: batch.si['x'],
-            self.local_sub_network.action_prev: batch.si['action_prev'],
-            self.local_sub_network.reward_prev: batch.si['reward_prev'],
-            self.local_sub_network.subgoal: batch.si['subgoal'],
+            sub_policy.x: batch.si['x'],
+            sub_policy.action_prev: batch.si['action_prev'],
+            sub_policy.reward_prev: batch.si['reward_prev'],
+            sub_policy.subgoal: batch.si['subgoal'],
             self.ac: batch.a,
             self.adv: batch.adv,
             self.r: batch.r,
-            self.local_sub_network.state_in[0]: batch.features[0],
-            self.local_sub_network.state_in[1]: batch.features[1],
+            sub_policy.state_in[0]: batch.features[0],
+            sub_policy.state_in[1]: batch.features[1],
         }
 
         fetched = sess.run(fetches, feed_dict=feed_dict)
-
         if should_compute_summary:
-            #self.summary_writer.add_summary(tf.Summary.FromString(fetched[0]), fetched[-1])
-            self.summary_writer.flush()
-        self.local_steps += 1
+            self.summary_writer.add_summary(fetched[0], fetched[-1])
+
+        return self.last_state, meta_reward, terminal_end
