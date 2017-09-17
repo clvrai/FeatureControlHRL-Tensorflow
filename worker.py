@@ -121,8 +121,14 @@ Setting up Tensorflow for data parallel work
     parser.add_argument('--env-id', default="PongDeterministic-v3", help='Environment id')
 
     # Add visualisation argument
-    parser.add_argument('--visualise', action='store_false',
+    parser.add_argument('--visualise', action='store_true',
                         help="Visualise the gym environment by running env.render() between each timestep")
+
+    # Add model parameters
+    parser.add_argument('--intrinsic-type', type=str, default='feature',
+                        help="feature or pixel")
+    parser.add_argument('--bptt', type=int, default=100,
+                        help="BPTT")
 
     args = parser.parse_args()
     spec = cluster_spec(args.num_workers, 1)

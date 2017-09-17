@@ -18,7 +18,6 @@ logger.setLevel(logging.INFO)
 
 # parsing cmd arguments
 parser = argparse.ArgumentParser(description="Test commands")
-parser.add_argument('-v', '--verbose', action='count', dest='verbosity', default=0, help='Set verbosity.')
 parser.add_argument('-e', '--env-id', type=str, default="MontezumaRevenge-v0",
                     help="Environment id")
 parser.add_argument('-l', '--log-dir', type=str, default="/tmp/montezuma",

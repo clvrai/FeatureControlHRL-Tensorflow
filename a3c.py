@@ -156,7 +156,7 @@ should be computed.
             self.loss = pi_loss + 0.5 * vf_loss - entropy * 0.01
 
 
-            self.meta_ac = tf.placeholder(tf.float32, [None, 32], name="meta_ac")
+            self.meta_ac = tf.placeholder(tf.float32, [None, self.subgoal_space], name="meta_ac")
             self.meta_adv = tf.placeholder(tf.float32, [None], name="meta_adv")
             self.meta_r = tf.placeholder(tf.float32, [None], name="meta_r")
 
