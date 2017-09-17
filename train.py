@@ -6,9 +6,6 @@ from six.moves import shlex_quote
 parser = argparse.ArgumentParser(description="Run commands")
 parser.add_argument('-w', '--num-workers', default=8, type=int,
                     help="Number of workers")
-parser.add_argument('-r', '--remotes', default=None,
-                    help='The address of pre-existing VNC servers and '
-                         'rewarders to use (e.g. -r vnc://localhost:5900+15900,vnc://localhost:5901+15901).')
 parser.add_argument('-e', '--env-id', type=str, default="MontezumaRevenge-v0",
                     help="Environment id")
 parser.add_argument('-l', '--log-dir', type=str, default="/tmp/montezuma",
@@ -22,6 +19,12 @@ parser.add_argument('-m', '--mode', type=str, default='tmux',
 parser.add_argument('--visualise', action='store_true',
                     help="Visualise the gym environment by running env.render() between each timestep")
 
+# Add model parameters
+parser.add_argument('--intrinsic-type', type=str, default='feature',
+                    help="feature or pixel")
+parser.add_argument('--bptt', type=int, default=100,
+                    help="BPTT")
+
 
 def new_cmd(session, name, cmd, mode, logdir, shell):
     if isinstance(cmd, (list, tuple)):
@@ -34,28 +37,26 @@ def new_cmd(session, name, cmd, mode, logdir, shell):
         return name, "nohup {} -c {} >{}/{}.{}.out 2>&1 & echo kill $! >>{}/kill.sh".format(shell, shlex_quote(cmd), logdir, session, name, logdir)
 
 
-def create_commands(session, num_workers, remotes, env_id, logdir, shell='bash', mode='tmux', visualise=False):
+def create_commands(session, num_workers, env_id, logdir,
+                    intrinsic_type, bptt, shell='bash', mode='tmux', visualise=False):
     # for launching the TF workers and for launching tensorboard
     base_cmd = [
         'CUDA_VISIBLE_DEVICES=',
         sys.executable, 'worker.py',
         '--log-dir', logdir,
         '--env-id', env_id,
-        '--num-workers', str(num_workers)]
+        '--num-workers', str(num_workers),
+        '--intrinsic-type', intrinsic_type,
+        '--bptt', str(bptt)
+    ]
 
     if visualise:
         base_cmd += ['--visualise']
 
-    if remotes is None:
-        remotes = ["1"] * num_workers
-    else:
-        remotes = remotes.split(',')
-        assert len(remotes) == num_workers
-
     cmds_map = [new_cmd(session, "ps", base_cmd + ["--job-name", "ps"], mode, logdir, shell)]
     for i in range(num_workers):
         cmds_map += [new_cmd(session,
-            "w-%d" % i, base_cmd + ["--job-name", "worker", "--task", str(i), "--remotes", remotes[i]], mode, logdir, shell)]
+            "w-%d" % i, base_cmd + ["--job-name", "worker", "--task", str(i)], mode, logdir, shell)]
 
     cmds_map += [new_cmd(session, "tb", ["tensorboard", "--logdir", logdir, "--port", "12345"], mode, logdir, shell)]
     if mode == 'tmux':
@@ -96,7 +97,10 @@ def create_commands(session, num_workers, remotes, env_id, logdir, shell='bash',
 
 def run():
     args = parser.parse_args()
-    cmds, notes = create_commands("a3c", args.num_workers, args.remotes, args.env_id, args.log_dir, mode=args.mode, visualise=args.visualise)
+    assert args.intrinsic_type in ['feature', 'pixel']
+    cmds, notes = create_commands("a3c", args.num_workers,
+                                  args.env_id, args.log_dir, args.intrinsic_type,
+                                  args.bptt, mode=args.mode, visualise=args.visualise)
     if args.dry_run:
         print("Dry-run mode due to -n flag, otherwise the following commands would be executed:")
     else:

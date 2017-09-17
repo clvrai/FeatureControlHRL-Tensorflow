@@ -22,8 +22,8 @@ class FastSaver(tf.train.Saver):
                                     meta_graph_suffix, False)
 
 def run(args, server):
-    env = create_env(args.env_id, client_id=str(args.task), remotes=args.remotes)
-    trainer = A3C(env, args.task, args.visualise)
+    env = create_env(args.env_id)
+    trainer = A3C(env, args.task, args.visualise, args.intrinsic_type, args.bptt)
 
     # Variable names that start with "local" are not saved in checkpoints.
     variables_to_save = [v for v in tf.global_variables() if not v.name.startswith("local")]
@@ -119,13 +119,9 @@ Setting up Tensorflow for data parallel work
     parser.add_argument('--num-workers', default=1, type=int, help='Number of workers')
     parser.add_argument('--log-dir', default="/tmp/pong", help='Log directory path')
     parser.add_argument('--env-id', default="PongDeterministic-v3", help='Environment id')
-    parser.add_argument('-r', '--remotes', default=None,
-                        help='References to environments to create (e.g. -r 20), '
-                             'or the address of pre-existing VNC servers and '
-                             'rewarders to use (e.g. -r vnc://localhost:5900+15900,vnc://localhost:5901+15901)')
 
     # Add visualisation argument
-    parser.add_argument('--visualise', action='store_true',
+    parser.add_argument('--visualise', action='store_false',
                         help="Visualise the gym environment by running env.render() between each timestep")
 
     args = parser.parse_args()

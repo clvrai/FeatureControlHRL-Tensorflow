@@ -1,9 +1,8 @@
 import numpy as np
 import tensorflow as tf
-from model import SubPolicy, MetaPolicy
 import scipy.signal
-import distutils.version
-use_tf12_api = distutils.version.LooseVersion(tf.VERSION) >= distutils.version.LooseVersion('0.12.0')
+
+from model import SubPolicy, MetaPolicy
 
 
 def discount(x, gamma):
@@ -75,7 +74,7 @@ once it has processed enough steps.
 
 
 class A3C(object):
-    def __init__(self, env, task, visualise):
+    def __init__(self, env, task, visualise, intrinsic_type, bptt):
         """
 An implementation of the A3C algorithm that is reasonably well-tuned for the VNC environments.
 Below, we will have a modest amount of complexity due to the way TensorFlow handles data parallelism.
@@ -85,19 +84,56 @@ should be computed.
 
         self.env = env
         self.task = task
+        self.visualise = visualise
+        self.intrinsic_type = intrinsic_type
+        self.bptt = bptt
+        self.subgoal_space = 32 if intrinsic_type == 'feature' else 37
+        self.action_space = env.action_space.n
+
+        self.summary_writer = None
+        self.local_steps = 0
+
+        self.beta = 0.75
+        self.eta = 0.05
+        self.num_local_steps = self.bptt
+        self.num_local_meta_steps = 20
+
+        # Testing
+        if task is None:
+            with tf.variable_scope("global"):
+                self.local_sub_network = SubPolicy(env.observation_space.shape,
+                                                   env.action_space.n,
+                                                   self.subgoal_space,
+                                                   self.intrinsic_type)
+                self.local_meta_network = MetaPolicy(env.observation_space.shape,
+                                                     self.subgoal_space,
+                                                     self.intrinsic_type)
+                return
+
+        # Training
         worker_device = "/job:worker/task:{}/cpu:0".format(task)
         with tf.device(tf.train.replica_device_setter(1, worker_device=worker_device)):
             with tf.variable_scope("global"):
                 print(env.observation_space.shape)
-                self.sub_network = SubPolicy(env.observation_space.shape, env.action_space.n, 32)
-                self.meta_network = MetaPolicy(env.observation_space.shape, 32)
+                self.sub_network = SubPolicy(env.observation_space.shape,
+                                             env.action_space.n,
+                                             self.subgoal_space,
+                                             self.intrinsic_type)
+                self.meta_network = MetaPolicy(env.observation_space.shape,
+                                               self.subgoal_space,
+                                               self.intrinsic_type)
                 self.global_step = tf.get_variable("global_step", [], tf.int32, initializer=tf.constant_initializer(0, dtype=tf.int32),
                                                    trainable=False)
 
         with tf.device(worker_device):
             with tf.variable_scope("local"):
-                self.local_sub_network = pi = SubPolicy(env.observation_space.shape, env.action_space.n, 32)
-                self.local_meta_network = meta_pi = MetaPolicy(env.observation_space.shape, 32)
+                self.local_sub_network = pi = SubPolicy(env.observation_space.shape,
+                                                        env.action_space.n,
+                                                        self.subgoal_space,
+                                                        self.intrinsic_type)
+                self.local_meta_network = meta_pi = MetaPolicy(env.observation_space.shape,
+                                                               self.subgoal_space,
+                                                               self.intrinsic_type)
                 pi.global_step = self.global_step
 
             self.ac = tf.placeholder(tf.float32, [None, env.action_space.n], name="ac")
@@ -188,20 +224,8 @@ should be computed.
             meta_opt = tf.train.AdamOptimizer(1e-4)
             self.meta_train_op = meta_opt.apply_gradients(meta_grads_and_vars)
 
-            self.summary_writer = None
-            self.local_steps = 0
-
     def start(self, sess, summary_writer):
         self.summary_writer = summary_writer
-
-        self.action_space = self.env.action_space.n
-        self.subgoal_space = 32
-
-        self.beta = 0.75
-        self.eta = 0.05
-        self.bptt = 100
-        self.num_local_steps = self.bptt
-        self.num_local_meta_steps = 20
 
     def process(self, sess):
         """
@@ -313,11 +337,27 @@ should be computed.
             # reward clipping to the range of [-1, 1]
             extrinsic_reward = max(min(episode_reward, 1), -1)
 
+            def get_mask(shape, subgoal):
+                mask = np.zeros(shape)
+                if subgoal < 36:
+                    y = subgoal // 6
+                    x = subgoal % 6
+                    mask[y*14:(y+1)*14, x*14:(x+1)*14] = 1
+                mask = np.stack([mask] * 3)
+                return mask
+
             def compute_intrinsic(state, last_state, subgoal):
-                f = sub_policy.feature(state)
-                last_f = sub_policy.feature(last_state)
-                diff = np.abs(f - last_f)
-                return self.eta * diff[subgoal] / (np.sum(diff) + 1e-10)
+                if self.intrinsic_type == 'feature':
+                    f = sub_policy.feature(state)
+                    last_f = sub_policy.feature(last_state)
+                    diff = np.abs(f - last_f)
+                    return self.eta * diff[subgoal] / (np.sum(diff) + 1e-10)
+                else:
+                    diff = state - last_state
+                    diff = diff * diff
+                    mask = get_mask(diff.shape, subgoal)
+                    return self.eta * np.sum(mask * diff) / (np.sum(diff) + 1e-10)
+
             intrinsic_reward = compute_intrinsic(state, self.last_state, subgoal.argmax())
             reward = self.beta * extrinsic_reward + (1 - self.beta) * intrinsic_reward
 
@@ -394,3 +434,121 @@ should be computed.
             self.summary_writer.add_summary(fetched[0], fetched[-1])
 
         return self.last_state, meta_reward, terminal_end
+
+
+    def evaluate(self, sess):
+        """
+        run one episode and process experience to train both meta and sub networks
+        """
+        env = self.env
+
+        sub_policy = self.local_sub_network
+        meta_policy = self.local_meta_network
+
+        self.last_state = env.reset()
+        self.last_meta_state = env.reset()
+        self.last_features = sub_policy.get_initial_features()
+        self.last_meta_features = meta_policy.get_initial_features()
+
+        self.last_action = np.zeros(self.action_space)
+        self.last_subgoal = np.zeros(self.subgoal_space)
+        self.last_reward = np.zeros(1)
+        self.last_meta_reward = np.zeros(1)
+
+        self.length = 0
+        self.rewards = 0
+        self.extrinsic_rewards = 0
+        self.intrinsic_rewards = 0
+
+        terminal_end = False
+        while not terminal_end:
+            terminal_end = self.meta_evaluate(sess)
+        return self.rewards, self.length
+
+    def meta_evaluate(self, sess):
+        meta_policy = self.local_meta_network
+
+        terminal_end = False
+        for _ in range(self.num_local_meta_steps):
+            fetched = meta_policy.act(self.last_meta_state, self.last_subgoal,
+                                      self.last_meta_reward, *self.last_meta_features)
+            subgoal, meta_features = fetched[0], fetched[2:]
+
+            if self.bptt == 20:
+                meta_reward = 0
+                for _ in range(5):
+                    state, reward, terminal_end = self.sub_evaluate(sess, subgoal)
+                    meta_reward += reward
+                    if terminal_end:
+                        break
+            elif self.bptt == 100:
+                state, meta_reward, terminal_end = self.sub_evaluate(sess, subgoal)
+
+            self.last_meta_state = state
+            self.last_subgoal = subgoal
+            self.last_meta_reward = [meta_reward]
+            self.last_meta_features = meta_features
+            if terminal_end:
+                break
+        return terminal_end
+
+    def sub_evaluate(self, sess, subgoal):
+        sub_policy = self.local_sub_network
+        meta_reward = 0
+
+        for _ in range(self.num_local_steps):
+            fetched = sub_policy.act(self.last_state, self.last_action,
+                                     self.last_reward, subgoal, *self.last_features)
+            action, features = fetched[0], fetched[2:]
+
+            # argmax to convert from one-hot
+            state, episode_reward, terminal, info = self.env.step(action.argmax())
+            # reward clipping to the range of [-1, 1]
+            extrinsic_reward = max(min(episode_reward, 1), -1)
+
+            if self.visualise:
+                self.env.render()
+
+            def get_mask(shape, subgoal):
+                mask = np.zeros(shape)
+                if subgoal < 36:
+                    y = subgoal // 6
+                    x = subgoal % 6
+                    mask[y*14:(y+1)*14, x*14:(x+1)*14] = 1
+                mask = np.stack([mask] * 3)
+                return mask
+
+            def compute_intrinsic(state, last_state, subgoal):
+                if self.intrinsic_type == 'feature':
+                    f = sub_policy.feature(state)
+                    last_f = sub_policy.feature(last_state)
+                    diff = np.abs(f - last_f)
+                    return self.eta * diff[subgoal] / (np.sum(diff) + 1e-10)
+                else:
+                    diff = state - last_state
+                    diff = diff * diff
+                    mask = get_mask(diff.shape, subgoal)
+                    return self.eta * np.sum(mask * diff) / (np.sum(diff) + 1e-10)
+
+            intrinsic_reward = compute_intrinsic(state, self.last_state, subgoal.argmax())
+            reward = self.beta * extrinsic_reward + (1 - self.beta) * intrinsic_reward
+
+            meta_reward += extrinsic_reward
+            # meta_reward += reward
+            self.intrinsic_rewards += intrinsic_reward
+            self.extrinsic_rewards += extrinsic_reward
+
+            self.length += 1
+            self.rewards += episode_reward
+
+            self.last_state = state
+            self.last_action = action
+            self.last_features = features
+            self.last_reward = [reward]
+
+            timestep_limit = self.env.spec.tags.get('wrapper_config.TimeLimit.max_episode_steps')
+            if terminal or self.length >= timestep_limit:
+                print("Episode finished. Ep rewards: %.5f (In: %.5f, Ex: %.5f). Length: %d" %
+                      (self.rewards, self.intrinsic_rewards, self.extrinsic_rewards, self.length))
+                return state, meta_reward, True
+        return state, meta_reward, False

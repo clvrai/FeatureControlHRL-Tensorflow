@@ -1,8 +1,7 @@
 import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.rnn as rnn
-import distutils.version
-use_tf100_api = distutils.version.LooseVersion(tf.VERSION) >= distutils.version.LooseVersion('1.0.0')
+
 
 def normalized_columns_initializer(std=1.0):
     def _initializer(shape, dtype=None, partition_info=None):
@@ -46,11 +45,12 @@ def categorical_sample(logits, d):
 
 
 class SubPolicy(object):
-    def __init__(self, ob_space, ac_space, subgoal_space):
+    def __init__(self, ob_space, ac_space, subgoal_space, intrinsic_type):
         self.x = x = tf.placeholder(tf.float32, [None] + list(ob_space), name='x')
         self.action_prev = action_prev = tf.placeholder(tf.float32, [None, ac_space], name='action_prev')
         self.reward_prev = reward_prev = tf.placeholder(tf.float32, [None, 1], name='reward_prev')
         self.subgoal = subgoal = tf.placeholder(tf.float32, [None, subgoal_space], name='subgoal')
+        self.intrinsic_type = intrinsic_type
 
         with tf.variable_scope('encoder'):
             x = tf.image.resize_images(x, [84, 84])
@@ -119,10 +119,11 @@ class SubPolicy(object):
 
 
 class MetaPolicy(object):
-    def __init__(self, ob_space, subgoal_space):
+    def __init__(self, ob_space, subgoal_space, intrinsic_type):
         self.x = x = tf.placeholder(tf.float32, [None] + list(ob_space), name='x_meta')
         self.subgoal_prev = subgoal_prev = tf.placeholder(tf.float32, [None, subgoal_space], name='subgoal_prev')
         self.reward_prev = reward_prev = tf.placeholder(tf.float32, [None, 1], name='reward_prev_meta')
+        self.intrinsic_type = intrinsic_type
 
         with tf.variable_scope('encoder', reuse=True):
             x = tf.image.resize_images(x, [84, 84])
