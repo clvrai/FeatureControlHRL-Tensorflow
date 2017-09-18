@@ -253,9 +253,9 @@ should be computed.
 
         terminal_end = False
         while not terminal_end:
-            terminal_end = self.meta_process(sess)
+            terminal_end = self._meta_process(sess)
 
-    def meta_process(self, sess):
+    def _meta_process(self, sess):
         sess.run(self.meta_sync)  # copy weights from shared to local
         meta_rollout = PartialRollout()
         meta_policy = self.local_meta_network
@@ -271,12 +271,12 @@ should be computed.
             if self.bptt == 20:
                 meta_reward = 0
                 for _ in range(5):
-                    state, reward, terminal_end = self.sub_process(sess, subgoal)
+                    state, reward, terminal_end = self._sub_process(sess, subgoal)
                     meta_reward += reward
                     if terminal_end:
                         break
             elif self.bptt == 100:
-                state, meta_reward, terminal_end = self.sub_process(sess, subgoal)
+                state, meta_reward, terminal_end = self._sub_process(sess, subgoal)
 
 
             si = {
@@ -320,7 +320,7 @@ should be computed.
 
         return terminal_end
 
-    def sub_process(self, sess, subgoal):
+    def _sub_process(self, sess, subgoal):
         sess.run(self.sync)  # copy weights from shared to local
         sub_rollout = PartialRollout()
         sub_policy = self.local_sub_network
@@ -462,10 +462,10 @@ should be computed.
 
         terminal_end = False
         while not terminal_end:
-            terminal_end = self.meta_evaluate(sess)
+            terminal_end = self._meta_evaluate(sess)
         return self.rewards, self.length
 
-    def meta_evaluate(self, sess):
+    def _meta_evaluate(self, sess):
         meta_policy = self.local_meta_network
 
         terminal_end = False
@@ -477,12 +477,12 @@ should be computed.
             if self.bptt == 20:
                 meta_reward = 0
                 for _ in range(5):
-                    state, reward, terminal_end = self.sub_evaluate(sess, subgoal)
+                    state, reward, terminal_end = self._sub_evaluate(sess, subgoal)
                     meta_reward += reward
                     if terminal_end:
                         break
             elif self.bptt == 100:
-                state, meta_reward, terminal_end = self.sub_evaluate(sess, subgoal)
+                state, meta_reward, terminal_end = self._sub_evaluate(sess, subgoal)
 
             self.last_meta_state = state
             self.last_subgoal = subgoal
@@ -492,7 +492,7 @@ should be computed.
                 break
         return terminal_end
 
-    def sub_evaluate(self, sess, subgoal):
+    def _sub_evaluate(self, sess, subgoal):
         sub_policy = self.local_sub_network
         meta_reward = 0
 

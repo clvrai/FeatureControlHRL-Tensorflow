@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+
 from six.moves import shlex_quote
 
 parser = argparse.ArgumentParser(description="Run commands")
@@ -94,7 +95,6 @@ def create_commands(session, num_workers, env_id, logdir,
 
     return cmds, notes
 
-
 def run():
     args = parser.parse_args()
     assert args.intrinsic_type in ['feature', 'pixel']
@@ -112,7 +112,6 @@ def run():
             os.environ["TMUX"] = ""
         os.system("\n".join(cmds))
     print('\n'.join(notes))
-
 
 if __name__ == "__main__":
     run()

@@ -1,18 +1,20 @@
 #!/usr/bin/env python
-import tensorflow as tf
 import argparse
 import logging
-import sys, signal
+import sys
+import signal
 import time
 import os
+
 from tqdm import tqdm
+import tensorflow as tf
+
 from a3c import A3C
 from envs import create_env
-import distutils.version
-use_tf12_api = distutils.version.LooseVersion(tf.VERSION) >= distutils.version.LooseVersion('0.12.0')
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
 
 # Disables write_meta_graph argument, which freezes entire process and is mostly useless.
 class FastSaver(tf.train.Saver):
@@ -20,6 +22,7 @@ class FastSaver(tf.train.Saver):
              meta_graph_suffix="meta", write_meta_graph=True):
         super(FastSaver, self).save(sess, save_path, global_step, latest_filename,
                                     meta_graph_suffix, False)
+
 
 def run(args, server):
     env = create_env(args.env_id)
