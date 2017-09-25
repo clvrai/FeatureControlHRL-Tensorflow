@@ -6,6 +6,7 @@ import signal
 import time
 import os
 
+import imageio
 from tqdm import tqdm
 import tensorflow as tf
 
@@ -61,7 +62,15 @@ def run(args, server):
                              save_model_secs=30,
                              save_summaries_secs=30)
 
-    num_global_steps = 1000000000
+    video_dir = os.path.join(args.log_dir, 'train_videos_' + args.intrinsic_type)
+    if not os.path.exists(video_dir):
+        os.makedirs(video_dir)
+    video_filename = video_dir + "/%s_%010d_%d.gif"
+    print("Video saved at %s" % video_dir)
+
+    num_global_steps = 100000000
+    num_record_steps = 1000000
+    last_record_step = 0
 
     logger.info(
         "Starting session. If this hangs, we're mostly likely waiting to connect to the parameter server. " +
@@ -84,6 +93,12 @@ def run(args, server):
             pbar.update(max(1, new_global_step - global_step))
             global_step = new_global_step
 
+            if args.task == 0 and global_step - last_record_step > num_record_steps:
+                sess.run(trainer.meta_sync)
+                sess.run(trainer.sync)
+                last_record_step = global_step
+                frames, reward, length = trainer.evaluate(sess)
+                imageio.mimsave(video_filename % (args.env_id, global_step, reward), frames, fps=30)
 
     # Ask for all the services to stop.
     sv.stop()

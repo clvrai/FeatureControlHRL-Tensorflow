@@ -461,14 +461,18 @@ should be computed.
         self.intrinsic_rewards = 0
 
         terminal_end = False
+        frames = [self.last_state]
         while not terminal_end:
-            terminal_end = self._meta_evaluate(sess)
-        return self.rewards, self.length
+            frames_, terminal_end = self._meta_evaluate(sess)
+            frames.extend(frames_)
+        frames = np.stack(frames)
+        return frames, self.rewards, self.length
 
     def _meta_evaluate(self, sess):
         meta_policy = self.local_meta_network
 
         terminal_end = False
+        frames = []
         for _ in range(self.num_local_meta_steps):
             fetched = meta_policy.act(self.last_meta_state, self.last_subgoal,
                                       self.last_meta_reward, *self.last_meta_features)
@@ -477,12 +481,14 @@ should be computed.
             if self.bptt == 20:
                 meta_reward = 0
                 for _ in range(5):
-                    state, reward, terminal_end = self._sub_evaluate(sess, subgoal)
+                    frames_, state, reward, terminal_end = self._sub_evaluate(sess, subgoal)
+                    frames.extend(frames_)
                     meta_reward += reward
                     if terminal_end:
                         break
             elif self.bptt == 100:
-                state, meta_reward, terminal_end = self._sub_evaluate(sess, subgoal)
+                frames_, state, meta_reward, terminal_end = self._sub_evaluate(sess, subgoal)
+                frames.extend(frames_)
 
             self.last_meta_state = state
             self.last_subgoal = subgoal
@@ -490,11 +496,12 @@ should be computed.
             self.last_meta_features = meta_features
             if terminal_end:
                 break
-        return terminal_end
+        return frames, terminal_end
 
     def _sub_evaluate(self, sess, subgoal):
         sub_policy = self.local_sub_network
         meta_reward = 0
+        frames = []
 
         for _ in range(self.num_local_steps):
             fetched = sub_policy.act(self.last_state, self.last_action,
@@ -505,6 +512,7 @@ should be computed.
             state, episode_reward, terminal, info = self.env.step(action.argmax())
             # reward clipping to the range of [-1, 1]
             extrinsic_reward = max(min(episode_reward, 1), -1)
+            frames.append(state)
 
             if self.visualise:
                 self.env.render()
@@ -550,5 +558,5 @@ should be computed.
             if terminal or self.length >= timestep_limit:
                 print("Episode finished. Ep rewards: %.5f (In: %.5f, Ex: %.5f). Length: %d" %
                       (self.rewards, self.intrinsic_rewards, self.extrinsic_rewards, self.length))
-                return state, meta_reward, True
-        return state, meta_reward, False
+                return frames, state, meta_reward, True
+        return frames, state, meta_reward, False

@@ -3,11 +3,10 @@ import argparse
 import logging
 import sys
 import signal
-import time
 import os
 
 import tensorflow as tf
-from tqdm import tqdm
+import imageio
 
 from a3c import A3C
 from envs import create_env
@@ -73,17 +72,25 @@ def run(args):
                              summary_writer=summary_writer,
                              ready_op=tf.report_uninitialized_variables(variables_to_save),
                              global_step=None,
-                             save_model_secs=30,
-                             save_summaries_secs=30)
+                             save_model_secs=0,
+                             save_summaries_secs=0)
+
+    video_dir = os.path.join(args.log_dir, 'test_videos_' + args.intrinsic_type)
+    if not os.path.exists(video_dir):
+        os.makedirs(video_dir)
+    video_filename = video_dir + "/%s_%02d_%d.gif"
+    print("Video saved at %s" % video_dir)
 
     with sv.managed_session() as sess, sess.as_default():
         trainer.start(sess, summary_writer)
         rewards = []
         lengths = []
-        for _ in range(10):
-            reward, length = trainer.evaluate(sess)
+        for i in range(10):
+            frames, reward, length = trainer.evaluate(sess)
             rewards.append(reward)
             lengths.append(length)
+            imageio.mimsave(video_filename % (args.env_id, i, reward), frames, fps=30)
+
         print('Evaluation: avg. reward %.2f    avg.length %.2f' %
               (sum(rewards) / 10.0, sum(lengths) / 10.0))
 
