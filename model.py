@@ -55,6 +55,7 @@ class SubPolicy(object):
         with tf.variable_scope('encoder'):
             x = tf.image.resize_images(x, [84, 84])
             x = x / 255.0
+            self.p = x
             x = tf.nn.relu(conv2d(x, 16, "l1", [8, 8], [4, 4]))
             x = tf.nn.relu(conv2d(x, 32, "l2", [4, 4], [2, 2]))
             self.f = tf.reduce_mean(x, axis=[1, 2])
@@ -115,7 +116,10 @@ class SubPolicy(object):
 
     def feature(self, state):
         sess = tf.get_default_session()
-        return sess.run(self.f, {self.x: [state]})[0, :]
+        if self.intrinsic_type == 'feature':
+            return sess.run(self.f, {self.x: [state]})[0, :]
+        else:
+            return sess.run(self.p, {self.x: [state]})[0, :]
 
 
 class MetaPolicy(object):

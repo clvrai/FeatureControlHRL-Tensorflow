@@ -347,13 +347,13 @@ should be computed.
                 return mask
 
             def compute_intrinsic(state, last_state, subgoal):
+                f = sub_policy.feature(state)
+                last_f = sub_policy.feature(last_state)
                 if self.intrinsic_type == 'feature':
-                    f = sub_policy.feature(state)
-                    last_f = sub_policy.feature(last_state)
                     diff = np.abs(f - last_f)
                     return self.eta * diff[subgoal] / (np.sum(diff) + 1e-10)
                 else:
-                    diff = state - last_state
+                    diff = f - last_f
                     diff = diff * diff
                     mask = get_mask(diff.shape, subgoal)
                     return self.eta * np.sum(mask * diff) / (np.sum(diff) + 1e-10)
