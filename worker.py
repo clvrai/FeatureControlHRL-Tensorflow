@@ -68,7 +68,7 @@ def run(args, server):
     video_filename = video_dir + "/%s_%010d_%d.gif"
     print("Video saved at %s" % video_dir)
 
-    num_global_steps = 100000000
+    num_global_steps = 300000000
     num_record_steps = 1000000
     last_record_step = 0
 
