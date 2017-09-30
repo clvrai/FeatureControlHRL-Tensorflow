@@ -1,27 +1,27 @@
 # FeatureControlHRL-Tensorflow
 
-As part of the implementation series of [Joseph Lim's group at USC](http://csail.mit.edu/~lim), our motivation is to accelerate (or sometimes delay) research in the AI community by promoting open-source projects. To this end, we implement state-of-the-art research papers, and publicly share them with concise reports. Please visit our [group github site](https://github.com/gitlimlab) for other projects.
+As part of the implementation series of [Joseph Lim's group at USC](http://www-bcf.usc.edu/~limjj/), our motivation is to accelerate (or sometimes delay) research in the AI community by promoting open-source projects. To this end, we implement state-of-the-art research papers, and publicly share them with concise reports. Please visit our [group github site](https://github.com/gitlimlab) for other projects.
 
 This project is implemented by [Youngwoon Lee](https://github.com/youngwoon) and the codes have been reviewed by [Shao-Hua Sun](https://github.com/shaohua0116) before being published.
 
 ## Description
 This repo is a [Tensorflow](https://www.tensorflow.org/) implementation of Feature-control and Pixel-control agents on Montezuma's Revenge: [Feature Control as Intrinsic Motivation for Hierarchical Reinforcement Learning](https://arxiv.org/abs/1705.06769).
 
-This paper presents a hierarchical reinforcement learning framework, which tackles a task with sparse rewards by extracting intrinsic rewards from changes in consecutive observations. The motivation of this paper is that given an intention of the agent the model can learn a feature that judges whether the intention is achieved or not. In other workds, the agent learns a set of skills that change future observations in a certain direction. For example, one skill we want to learn in Montezuma's Revenge is catching a key. The success of this skill can be judged by the presence of the key. If we succeed to remove a key in the observation, we can get reward since the presence of the key changes. These skills are called subgoals of the meta-controller.
+This paper presents a hierarchical reinforcement learning framework which tackles a task with sparse rewards by extracting intrinsic rewards from changes in consecutive observations. The motivation of this paper is that given an intention of an agent a model learns a set of features, each of which can judge whether the corresponding intention is achieved or not. In other words, the agent learns a set of skills that change future observations in a certain direction. For example, one skill we want to learn in Montezuma's Revenge is catching a key. The success of this skill can be judged by the presence of the key. If we succeed to remove the key from the observation, we can get reward since the presence of the key is changed. These skills are called subgoals of the meta-controller.
 
 <p align="center">
     <img src="assets/model.png"/>
 </p>
 
-The proposed model consists of two controllers, meta-controller and sub-controller. The meta-controller sets a subgoal that wants to achieve for the next 100 timesteps. Then the sub-controller finds the optimal actions to accomplish the subgoal. The meta-controller decides the next subgoal based on the previous subgoal, the current observation, and the rewards for the last subgoal. Then the actions are computed using the previous reward, the previous action, and the current observation. To capture the temporal information, the policy networks of meta-controller and sub-controller use LSTM.
+The proposed model consists of two controllers, meta-controller and sub-controller. The meta-controller sets a subgoal that wants to achieve for the next 100 timesteps. Then the sub-controller finds the optimal actions to accomplish this subgoal. The meta-controller decides the next subgoal based on the previous subgoal, the current observation, and the reward it gathered during the previous subgoal. Then the actions are computed using the previous reward, the previous action, and the current observation. To capture temporal information, policy networks of the meta-controller and the sub-controller use LSTMs.
 
-The intrinsic reward of feature-control agent is the relative changes in two consecutive frames' k-th feature map over all feature maps on the second convolutional layer. The paper also proposes pixel-control agent which computes intrinsic reward based on the pixel value changes in a certain region. This is in-progress and will be release soon.
+The intrinsic reward of a feature-control agent is the relative changes in two consecutive frames' k-th feature map over all feature maps on the second convolutional layer. The paper also proposes pixel-control agent which computes intrinsic reward based on the pixel value changes in a certain region. This agnet is in progress and will be released soon.
 
 <p align="center">
     <img src="assets/intrinsic_feature.png"/>
 </p>
 
-This method reaches to 2500 score for Montezuma's Revenge-v0 which outperforms the-state-of-the-art method (Feudal Network).
+This method outperforms the state-of-the-art method (Feudal Network) and reaches to 2500 score on Montezuma's Revenge-v0.
 
 ## Dependencies
 
@@ -39,13 +39,17 @@ This method reaches to 2500 score for Montezuma's Revenge-v0 which outperforms t
 - Execute the following command to train a model:
 
 ```
-$ python train.py --log-dir='/tmp/feature-control' --intrinsic-type='feature'
+$ python train.py --log-dir='/tmp/feature-control' --intrinsic-type='feature' --bptt=100
 ```
+
+- So far, this repo only supports a feature-control agent. We are planning to release pixel-control agent soon.
+
+- With '--bptt' option you can choose 20 or 100 time steps as a bptt.
 
 - Once training is ended, you can test the agent will play the game 10 times and show the average reward.
 
 ```
-$ python test.py --log-dir='/tmp/feature-control' --visualise
+$ python test.py --log-dir='/tmp/feature-control' --intrinsic-type='feature' --bptt=100 --visualise
 ```
 
 - Check the training status on Tensorboard. The default port number is 12345 (i.e. http://localhost:12345).
@@ -56,6 +60,8 @@ $ python test.py --log-dir='/tmp/feature-control' --visualise
 ### Montezuma's Revenge-v0
 
 ![training_curve_feature_control](assets/feature-control-bptt-100.png)
+
+- The training speed shows slower convergence speed compared to the result reported in the paper. Be patient and keep training an agent until 20M iterations.
 
 ### Videos
 
