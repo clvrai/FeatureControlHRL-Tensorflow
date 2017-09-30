@@ -15,7 +15,7 @@ This paper presents a hierarchical reinforcement learning framework which tackle
 
 The proposed model consists of two controllers, meta-controller and sub-controller. The meta-controller sets a subgoal that wants to achieve for the next 100 timesteps. Then the sub-controller finds the optimal actions to accomplish this subgoal. The meta-controller decides the next subgoal based on the previous subgoal, the current observation, and the reward it gathered during the previous subgoal. Then the actions are computed using the previous reward, the previous action, and the current observation. To capture temporal information, policy networks of the meta-controller and the sub-controller use LSTMs.
 
-The intrinsic reward of a feature-control agent is the relative changes in two consecutive frames' k-th feature map over all feature maps on the second convolutional layer. The paper also proposes pixel-control agent which computes intrinsic reward based on the pixel value changes in a certain region. This agnet is in progress and will be released soon.
+The intrinsic reward of a feature-control agent is the relative changes in two consecutive frames' k-th feature map over all feature maps on the second convolutional layer. The paper also proposes pixel-control agent which computes intrinsic reward based on the pixel value changes in a certain region.
 
 <p align="center">
     <img src="assets/intrinsic_feature.png"/>
@@ -42,9 +42,9 @@ This method outperforms the state-of-the-art method (Feudal Network) and reaches
 $ python train.py --log-dir='/tmp/feature-control' --intrinsic-type='feature' --bptt=100
 ```
 
-- So far, this repo only supports a feature-control agent. We are planning to release pixel-control agent soon.
+- `intrinsic-type` can be either `'feature'` or `'pixel'`
 
-- With '--bptt' option you can choose 20 or 100 time steps as a bptt.
+- With `--bptt` option you can choose 20 or 100 time steps as a bptt.
 
 - Once training is ended, you can test the agent will play the game 10 times and show the average reward.
 
@@ -59,11 +59,15 @@ $ python test.py --log-dir='/tmp/feature-control' --intrinsic-type='feature' --b
 
 ### Montezuma's Revenge-v0
 
+- Feature-control agent with bptt 100
+![training_curve_feature_control](assets/feature-control-bptt-100.png)
+
+- Pixel-control agent with bptt 100
 ![training_curve_feature_control](assets/feature-control-bptt-100.png)
 
 - The training speed shows slower convergence speed compared to the result reported in the paper. Be patient and keep training an agent until 20M iterations.
 
-### Videos
+### Videos (Feature-control agent)
 
 | Iterations |                   10M                    |                   27M                    |                   50M                    |                   90M                    |                   160M                   |
 | :--------: | :--------------------------------------: | :--------------------------------------: | :--------------------------------------: | :--------------------------------------: | :--------------------------------------: |
