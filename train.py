@@ -14,7 +14,8 @@ parser.add_argument('-l', '--log-dir', type=str, default="/tmp/montezuma",
 parser.add_argument('-n', '--dry-run', action='store_true',
                     help="Print out commands rather than executing them")
 parser.add_argument('-m', '--mode', type=str, default='tmux',
-                    help="tmux: run workers in a tmux session. nohup: run workers with nohup. child: run workers as child processes")
+                    help="tmux: run workers in a tmux session. nohup: "
+                         "run workers with nohup. child: run workers as child processes")
 
 # Add visualise tag
 parser.add_argument('--visualise', action='store_true',
@@ -22,7 +23,7 @@ parser.add_argument('--visualise', action='store_true',
 
 # Add model parameters
 parser.add_argument('--intrinsic-type', type=str, default='feature',
-                    help="feature or pixel")
+                    choices=['feature', 'pixel'], help="feature or pixel")
 parser.add_argument('--bptt', type=int, default=100,
                     help="BPTT")
 
@@ -40,7 +41,7 @@ def new_cmd(session, name, cmd, mode, logdir, shell):
 
 def create_commands(session, num_workers, env_id, logdir,
                     intrinsic_type, bptt, shell='bash', mode='tmux', visualise=False):
-    # for launching the TF workers and for launching tensorboard
+    # Launch the TF workers and for launching tensorboard
     base_cmd = [
         'CUDA_VISIBLE_DEVICES=',
         sys.executable, 'worker.py',
@@ -56,10 +57,11 @@ def create_commands(session, num_workers, env_id, logdir,
 
     cmds_map = [new_cmd(session, "ps", base_cmd + ["--job-name", "ps"], mode, logdir, shell)]
     for i in range(num_workers):
-        cmds_map += [new_cmd(session,
-            "w-%d" % i, base_cmd + ["--job-name", "worker", "--task", str(i)], mode, logdir, shell)]
+        cmds_map += [new_cmd(session, "w-%d" % i, base_cmd +
+                             ["--job-name", "worker", "--task", str(i)], mode, logdir, shell)]
 
-    cmds_map += [new_cmd(session, "tb", ["tensorboard", "--logdir", logdir, "--port", "12345"], mode, logdir, shell)]
+    cmds_map += [new_cmd(session, "tb", ["tensorboard", "--logdir", logdir,
+                                         "--port", "12345"], mode, logdir, shell)]
     if mode == 'tmux':
         cmds_map += [new_cmd(session, "htop", ["htop"], mode, logdir, shell)]
 
@@ -82,10 +84,12 @@ def create_commands(session, num_workers, env_id, logdir,
 
     if mode == 'tmux':
         cmds += [
-        "kill $( lsof -i:12345 -t ) > /dev/null 2>&1",  # kill any process using tensorboard's port
-        "kill $( lsof -i:12222-{} -t ) > /dev/null 2>&1".format(num_workers+12222), # kill any processes using ps / worker ports
-        "tmux kill-session -t {}".format(session),
-        "tmux new-session -s {} -n {} -d {}".format(session, windows[0], shell)
+            # kill any process using tensorboard's port
+            "kill $( lsof -i:12345 -t ) > /dev/null 2>&1",
+            # kill any processes using ps / worker ports
+            "kill $( lsof -i:12222-{} -t ) > /dev/null 2>&1".format(num_workers+12222),
+            "tmux kill-session -t {}".format(session),
+            "tmux new-session -s {} -n {} -d {}".format(session, windows[0], shell)
         ]
         for w in windows[1:]:
             cmds += ["tmux new-window -t {} -n {} {}".format(session, w, shell)]
@@ -95,9 +99,9 @@ def create_commands(session, num_workers, env_id, logdir,
 
     return cmds, notes
 
+
 def run():
     args = parser.parse_args()
-    assert args.intrinsic_type in ['feature', 'pixel']
     cmds, notes = create_commands("a3c", args.num_workers,
                                   args.env_id, args.log_dir, args.intrinsic_type,
                                   args.bptt, mode=args.mode, visualise=args.visualise)

@@ -104,6 +104,7 @@ def run(args, server):
     sv.stop()
     logger.info('reached %s steps. worker stopped.', global_step)
 
+
 def cluster_spec(num_workers, num_ps):
     """
 More tensorflow setup for data parallelism
@@ -125,6 +126,7 @@ More tensorflow setup for data parallelism
     cluster['worker'] = all_workers
     return cluster
 
+
 def main(_):
     """
 Setting up Tensorflow for data parallel work
@@ -144,7 +146,7 @@ Setting up Tensorflow for data parallel work
 
     # Add model parameters
     parser.add_argument('--intrinsic-type', type=str, default='feature',
-                        help="feature or pixel")
+                        choices=['feature', 'pixel'], help="feature or pixel")
     parser.add_argument('--bptt', type=int, default=100,
                         help="BPTT")
 

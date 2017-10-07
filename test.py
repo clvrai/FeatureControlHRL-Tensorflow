@@ -28,7 +28,7 @@ parser.add_argument('--visualise', action='store_true',
 
 # Add model parameters
 parser.add_argument('--intrinsic-type', type=str, default='feature',
-                    help="Feature-control or Pixel-control")
+                    chioces=['feature', 'pixel'], help="Feature-control or Pixel-control")
 parser.add_argument('--bptt', type=int, default=100,
                     help="BPTT")
 
@@ -39,6 +39,7 @@ class FastSaver(tf.train.Saver):
              meta_graph_suffix="meta", write_meta_graph=True):
         super(FastSaver, self).save(sess, save_path, global_step, latest_filename,
                                     meta_graph_suffix, False)
+
 
 def run(args):
     env = create_env(args.env_id)
@@ -96,6 +97,7 @@ def run(args):
 
     # Ask for all the services to stop.
     sv.stop()
+
 
 def main(_):
     args, unparsed = parser.parse_known_args()
