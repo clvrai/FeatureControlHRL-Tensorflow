@@ -28,7 +28,7 @@ parser.add_argument('--visualise', action='store_true',
 
 # Add model parameters
 parser.add_argument('--intrinsic-type', type=str, default='feature',
-                    chioces=['feature', 'pixel'], help="Feature-control or Pixel-control")
+                    choices=['feature', 'pixel'], help="Feature-control or Pixel-control")
 parser.add_argument('--bptt', type=int, default=100,
                     help="BPTT")
 

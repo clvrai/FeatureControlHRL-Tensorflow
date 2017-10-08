@@ -384,7 +384,7 @@ should be computed.
             self.last_reward = [reward]
 
             timestep_limit = self.env.spec.tags.get('wrapper_config.TimeLimit.max_episode_steps')
-            if terminal or self.length >= timestep_limit:
+            if terminal or (timestep_limit and self.length >= timestep_limit):
                 terminal_end = True
 
                 summary = tf.Summary()
@@ -555,7 +555,7 @@ should be computed.
             self.last_reward = [reward]
 
             timestep_limit = self.env.spec.tags.get('wrapper_config.TimeLimit.max_episode_steps')
-            if terminal or self.length >= timestep_limit:
+            if terminal or (timestep_limit and self.length >= timestep_limit):
                 print("Episode finished. Ep rewards: %.5f (In: %.5f, Ex: %.5f). Length: %d" %
                       (self.rewards, self.intrinsic_rewards, self.extrinsic_rewards, self.length))
                 return frames, state, meta_reward, True
