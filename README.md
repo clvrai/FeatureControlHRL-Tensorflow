@@ -63,7 +63,7 @@ $ python test.py --log-dir='/tmp/feature-control' --intrinsic-type='feature' --b
 ![training_curve_feature_control](assets/feature-control-bptt-100.png)
 
 - Pixel-control agent with bptt 100
-![training_curve_feature_control](assets/feature-control-bptt-100.png)
+![training_curve_pixel_control](assets/pixel-control-bptt-100.png)
 
 - The training speed shows slower convergence speed compared to the result reported in the paper. Be patient and keep training an agent until 20M iterations.
 
