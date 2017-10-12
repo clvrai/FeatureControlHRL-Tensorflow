@@ -71,7 +71,7 @@ $ python test.py --log-dir='/tmp/feature-control' --intrinsic-type='feature' --b
 
 | Iterations |                   10M                    |                   27M                    |                   50M                    |                   90M                    |                   160M                   |
 | :--------: | :--------------------------------------: | :--------------------------------------: | :--------------------------------------: | :--------------------------------------: | :--------------------------------------: |
-|  Rewards   |                    0                     |                   100                    |                   500                    |                    0                     |                   2500                   |
+|  Rewards   |                    0                     |                   100                    |                   400                    |                    0                     |                   2500                   |
 |   Videos   | ![training_curve_feature_control](assets/feature-control-video-10M.gif) | ![training_curve_feature_control](assets/feature-control-video-27M.gif) | ![training_curve_feature_control](assets/feature-control-video-50M.gif) | ![training_curve_feature_control](assets/feature-control-video-90M.gif) | ![training_curve_feature_control](assets/feature-control-video-160M.gif) |
 
 
